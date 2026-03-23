@@ -11,6 +11,7 @@ pkgrel=1
 pkgdesc="Patched Intel iwlwifi/iwlmvm modules with lar_disable support for Arch Linux UKI systems"
 arch=('x86_64')
 license=('GPL2')
+url="https://github.com/TenkyuChimata/iwlwifi-lar-patched"
 depends=(
   "${_pkgbase}=${_kernelpkgver}"
   "${_pkgbase}-headers=${_kernelpkgver}"
