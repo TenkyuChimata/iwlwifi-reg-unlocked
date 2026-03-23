@@ -1,0 +1,26 @@
+pkgbase = iwlwifi-lar-patched
+	pkgdesc = Patched Intel iwlwifi/iwlmvm modules with lar_disable support for Arch Linux UKI systems
+	pkgver = 6.19.9
+	pkgrel = 1
+	install = iwlwifi-lar-patched.install
+	arch = x86_64
+	license = GPL2
+	makedepends = bc
+	makedepends = kmod
+	depends = linux=6.19.9.arch1-1
+	depends = linux-headers=6.19.9.arch1-1
+	depends = dracut
+	depends = systemd
+	depends = zstd
+	options = !strip
+	options = !debug
+	source = https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.19.9.tar.xz
+	source = 0001-iwlwifi-add-lar_disable.patch
+	source = iwlwifi-lar.conf
+	source = dracut-iwlwifi.conf
+	sha256sums = SKIP
+	sha256sums = da2ab52ccdef2b93088c9e0c56bc1c166bf748d021b529cb2af2ff6c5d9e85cc
+	sha256sums = d0f468221c28f5f07a040f36df4dcf571d3931eef7ed273d4e57b631ef9540d3
+	sha256sums = a50fe688ef5c647b9b7ca7c6c5f351a4c0d42bfc5044f14df88f0d1e02a92806
+
+pkgname = iwlwifi-lar-patched
