@@ -8,7 +8,7 @@ _krel="${_kernver}-${_archrel}"
 
 pkgver="${_kernver}"
 pkgrel=1
-pkgdesc="Patched Intel iwlwifi/iwlmvm modules with LAR disable and 6GHz/NO_IR unlock support for Arch Linux UKI systems"
+pkgdesc="Patched Intel iwlwifi and cfg80211 modules with LAR disable, regulatory bypass and 6GHz/NO_IR unlock support for Arch Linux"
 arch=('x86_64')
 license=('GPL2')
 url="https://github.com/TenkyuChimata/linux-wireless-reg-unlocked"
