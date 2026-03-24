@@ -24,6 +24,7 @@ source=(
   "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${_kernver}.tar.xz"
   '0001-iwlwifi-add-lar_disable.patch'
   '0002-iwlwifi-unlock-6ghz-and-noir.patch'
+  '0003-cfg80211-disable-regdom-intersect-and-ignore-hints.patch'
   'iwlwifi-lar.conf'
   'dracut-iwlwifi.conf'
 )
@@ -31,6 +32,7 @@ sha256sums=(
   'SKIP'
   'da2ab52ccdef2b93088c9e0c56bc1c166bf748d021b529cb2af2ff6c5d9e85cc'
   '8510a7a2b69f696999efddb40c79f3735049406d0f8432c2a23dd3f58ab8f883'
+  'ef26436f30412184a8af4418f7deb00992ef7624d9dc4960d9730e56ed2cee25'
   'd0f468221c28f5f07a040f36df4dcf571d3931eef7ed273d4e57b631ef9540d3'
   'a50fe688ef5c647b9b7ca7c6c5f351a4c0d42bfc5044f14df88f0d1e02a92806'
 )
@@ -43,6 +45,7 @@ prepare() {
 
   patch -Np1 -i "${srcdir}/0001-iwlwifi-add-lar_disable.patch"
   patch -Np1 -i "${srcdir}/0002-iwlwifi-unlock-6ghz-and-noir.patch"
+  patch -Np1 -i "${srcdir}/0003-cfg80211-disable-regdom-intersect-and-ignore-hints.patch"
 
   cd drivers/net/wireless/intel/iwlwifi
   [[ -f dvm/Makefile ]] && sed -i 's|$(srctree)/||g' dvm/Makefile
