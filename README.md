@@ -11,14 +11,6 @@ Designed for **Arch Linux** users who need full control over Wi-Fi capabilities.
 
 ---
 
-## 📦 AUR
-
-> ⚠️ Package name may differ depending on release branch
-
-https://aur.archlinux.org/packages/iwlwifi-lar-patched
-
----
-
 ## 🚀 Features
 
 - Disable Intel iwlwifi LAR restrictions
@@ -46,17 +38,11 @@ This project **intentionally bypasses regulatory enforcement mechanisms**.
 
 ## 📥 Installation
 
-### Using an AUR helper (recommended)
-
-```bash
-yay -S iwlwifi-lar-patched
-```
-
 ### Manual build
 
 ```bash
-git clone https://aur.archlinux.org/iwlwifi-lar-patched.git
-cd iwlwifi-lar-patched
+git clone https://github.com/TenkyuChimata/iwlwifi-reg-unlocked.git
+cd iwlwifi-reg-unlocked
 makepkg -si
 ```
 
@@ -110,20 +96,6 @@ This patch modifies iwlwifi behavior to:
 
 ---
 
-## 🔐 Secure Boot
-
-If Secure Boot is enabled, kernel modules must be signed.
-
-Example:
-
-```bash
-./sign-modules.sh
-```
-
-Ensure your keys are enrolled (e.g. using `sbctl`).
-
----
-
 ## 🧩 How it works
 
 This project patches:
@@ -139,24 +111,8 @@ Key changes:
 
 ---
 
-## 🔄 Updating
-
-This package follows Arch kernel updates.
-
-You must rebuild after kernel upgrades:
-
-```bash
-yay -Syu
-```
-
-or manually rebuild.
-
----
-
 ## 🧪 Tested hardware
 
-- Intel AX200
-- Intel AX210
 - Intel AX211
 
 ---
@@ -166,34 +122,3 @@ or manually rebuild.
 - 6 GHz still depends on firmware capabilities
 - Some AP modes may fail due to firmware constraints
 - Future kernel updates may break patch offsets
-
----
-
-## 📁 Repository Structure
-
-- `PKGBUILD` – Arch package definition
-- `.SRCINFO` – AUR metadata
-- `0001-*.patch` – LAR disable patch
-- `0002-*.patch` – regulatory unlock patch
-- `sign-modules.sh` – Secure Boot helper
-
----
-
-## 📜 License
-
-This project follows the original Linux kernel licensing (GPLv2).
-
----
-
-## ❤️ Credits
-
-- Intel iwlwifi driver developers
-- Linux wireless subsystem maintainers
-- Arch Linux community
-- Reverse engineering & patch contributors
-
----
-
-## 🐾 Maintainer
-
-TenkyuChimata
