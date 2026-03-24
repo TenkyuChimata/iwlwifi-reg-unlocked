@@ -1,12 +1,19 @@
-# iwlwifi-lar-patched
+# iwlwifi-reg-unlocked
 
-Patched Intel **iwlwifi** kernel modules with **LAR (Location Aware Regulatory) restrictions disabled** for Arch Linux.
+Patched Intel **iwlwifi** kernel modules with **regulatory restrictions relaxed**, including:
 
-This package allows advanced users to manually control regulatory domain and access additional Wi-Fi channels and power settings.
+- LAR (Location Aware Regulatory) disable
+- 6 GHz channel exposure
+- NO_IR (no initiate radiation) removal
+- Forced 6 GHz VLP AP capability
+
+Designed for **Arch Linux** users who need full control over Wi-Fi capabilities.
 
 ---
 
 ## 📦 AUR
+
+> ⚠️ Package name may differ depending on release branch
 
 https://aur.archlinux.org/packages/iwlwifi-lar-patched
 
@@ -15,19 +22,25 @@ https://aur.archlinux.org/packages/iwlwifi-lar-patched
 ## 🚀 Features
 
 - Disable Intel iwlwifi LAR restrictions
-- Allow manual regulatory domain control
-- Based on latest Arch Linux kernel
-- Built as external modules
-- Compatible with Secure Boot (with signing script)
+- Unlock hidden / restricted channels (including 6 GHz)
+- Remove `NO_IR` limitations (allow AP/initiating transmissions)
+- Enable 6 GHz VLP AP capability regardless of regulatory flags
+- Preserve compatibility with Arch Linux kernel updates
+- Built as external kernel modules (no full kernel rebuild)
 
 ---
 
 ## ⚠️ Disclaimer
 
-- This package **may violate local wireless regulations**
-- Use at your own risk
-- Intended for **advanced users only**
-- You are responsible for complying with your country's laws
+> 🚨 **IMPORTANT**
+
+This project **intentionally bypasses regulatory enforcement mechanisms**.
+
+- May violate local wireless communication laws
+- May cause interference with licensed spectrum users
+- Not certified for production or commercial use
+
+**By using this software, you accept full responsibility for compliance with your local regulations.**
 
 ---
 
@@ -57,7 +70,7 @@ After installation:
 reboot
 ```
 
-Then you can set regulatory domain manually:
+Set regulatory domain manually:
 
 ```bash
 sudo iw reg set US
@@ -71,27 +84,88 @@ iw reg get
 
 ---
 
+## 📡 What is unlocked
+
+This patch modifies iwlwifi behavior to:
+
+### ✔ Channel handling
+
+- Prevent 6 GHz channels from being discarded when LAR is disabled
+- Allow channels without `NVM_CHANNEL_VALID`
+
+### ✔ Transmission restrictions
+
+- Remove `NO_IR` flags
+- Allow initiating transmissions (AP / P2P GO)
+
+### ✔ 6 GHz capabilities
+
+- Force-enable `IEEE80211_CHAN_ALLOW_6GHZ_VLP_AP`
+- Remove AFC/VLP client restrictions
+
+### ✔ Regulatory bypass
+
+- Ignore parts of regulatory capability (`reg_capa`)
+- Allow manual override via `iw reg set`
+
+---
+
 ## 🔐 Secure Boot
 
-If Secure Boot is enabled, you must sign the kernel modules.
+If Secure Boot is enabled, kernel modules must be signed.
 
-A helper script is included:
+Example:
 
 ```bash
 ./sign-modules.sh
 ```
 
-Make sure your keys are enrolled (e.g. using `sbctl`).
+Ensure your keys are enrolled (e.g. using `sbctl`).
 
 ---
 
 ## 🧩 How it works
 
-This package patches the Intel iwlwifi driver to bypass LAR enforcement, allowing:
+This project patches:
 
-- Manual regulatory override
-- Access to additional frequency bands
-- Custom transmit power configurations
+- `iwl-nvm-parse.c`
+- related regulatory flag handling paths
+
+Key changes:
+
+- Skip invalid channel filtering when LAR is disabled (for 6 GHz)
+- Remove regulatory-based transmit restrictions
+- Force-enable selected capabilities
+
+---
+
+## 🔄 Updating
+
+This package follows Arch kernel updates.
+
+You must rebuild after kernel upgrades:
+
+```bash
+yay -Syu
+```
+
+or manually rebuild.
+
+---
+
+## 🧪 Tested hardware
+
+- Intel AX200
+- Intel AX210
+- Intel AX211
+
+---
+
+## ⚠️ Known limitations
+
+- 6 GHz still depends on firmware capabilities
+- Some AP modes may fail due to firmware constraints
+- Future kernel updates may break patch offsets
 
 ---
 
@@ -99,40 +173,27 @@ This package patches the Intel iwlwifi driver to bypass LAR enforcement, allowin
 
 - `PKGBUILD` – Arch package definition
 - `.SRCINFO` – AUR metadata
-- `build.sh` – module build helper
-- `sign-modules.sh` – Secure Boot signing helper
-
----
-
-## 🔄 Updating
-
-This package follows Arch kernel updates.  
-Rebuild is required after kernel upgrades.
-
----
-
-## 🐾 Notes
-
-- Tested on Intel AX200 / AX210 / AX211
-- May break with future kernel changes
-- Use with caution in production environments
+- `0001-*.patch` – LAR disable patch
+- `0002-*.patch` – regulatory unlock patch
+- `sign-modules.sh` – Secure Boot helper
 
 ---
 
 ## 📜 License
 
-This project follows the original Linux kernel licensing.
+This project follows the original Linux kernel licensing (GPLv2).
 
 ---
 
 ## ❤️ Credits
 
 - Intel iwlwifi driver developers
+- Linux wireless subsystem maintainers
 - Arch Linux community
-- Contributors to LAR patch implementations
+- Reverse engineering & patch contributors
 
 ---
 
-## 🐱 Maintainer
+## 🐾 Maintainer
 
 TenkyuChimata
