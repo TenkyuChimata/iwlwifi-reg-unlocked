@@ -10,39 +10,35 @@ _rebuild_boot_artifacts() {
   depmod -a "${kver}" || depmod -a || \
     echo "==> Warning: depmod failed."
 
-  if [[ -x /usr/bin/mkinitcpio ]]; then
-    echo "==> Rebuilding initramfs with mkinitcpio..."
-    mkinitcpio -P || \
-      echo "==> Warning: mkinitcpio failed, please rebuild manually."
-  fi
-
-  if [[ -x /usr/bin/dracut ]]; then
-    echo "==> Rebuilding initramfs with dracut for ${kver}..."
-    dracut --force --kver "${kver}" || \
-      echo "==> Warning: dracut failed, please rebuild manually."
-  fi
-
   if [[ -x /usr/bin/kernel-install && -f "${vmlinuz}" ]]; then
     echo "==> Refreshing kernel-install managed entries for ${kver}..."
     kernel-install add "${kver}" "${vmlinuz}" || \
       echo "==> Warning: kernel-install failed, please refresh boot artifacts manually."
+  elif [[ -x /usr/bin/dracut ]]; then
+    echo "==> Rebuilding initramfs with dracut for ${kver}..."
+    dracut --force --kver "${kver}" || \
+      echo "==> Warning: dracut failed, please rebuild manually."
+  elif [[ -x /usr/bin/mkinitcpio ]]; then
+    echo "==> Rebuilding initramfs with mkinitcpio..."
+    mkinitcpio -P || \
+      echo "==> Warning: mkinitcpio failed, please rebuild manually."
   fi
 }
 
 post_install() {
   _rebuild_boot_artifacts
-  echo "==> iwlwifi-lar-patched installed."
+  echo "==> linux-wireless-reg-unlocked installed."
   echo "==> Reboot is recommended to refresh boot-time driver state."
 }
 
 post_upgrade() {
   _rebuild_boot_artifacts
-  echo "==> iwlwifi-lar-patched upgraded."
+  echo "==> linux-wireless-reg-unlocked upgraded."
   echo "==> Reboot is recommended to refresh boot-time driver state."
 }
 
 post_remove() {
   _rebuild_boot_artifacts
-  echo "==> iwlwifi-lar-patched removed."
+  echo "==> linux-wireless-reg-unlocked removed."
   echo "==> Reboot is recommended to restore boot-time driver state."
 }

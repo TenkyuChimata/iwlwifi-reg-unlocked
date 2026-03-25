@@ -7,7 +7,7 @@ _archrel=$(printf '%s\n' "${_kernelpkgver}" | sed -E "s/^${_kernver}\.(.*)$/\1/"
 _krel="${_kernver}-${_archrel}"
 
 pkgver="${_kernver}"
-pkgrel=3
+pkgrel=4
 pkgdesc="Patched iwlwifi and cfg80211 modules with LAR disable and modified regulatory behavior for Arch Linux"
 arch=('x86_64')
 url="https://github.com/TenkyuChimata/linux-wireless-reg-unlocked"

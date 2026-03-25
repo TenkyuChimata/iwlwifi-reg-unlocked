@@ -1,7 +1,7 @@
 pkgbase = linux-wireless-reg-unlocked
 	pkgdesc = Patched iwlwifi and cfg80211 modules with LAR disable and modified regulatory behavior for Arch Linux
 	pkgver = 6.19.9
-	pkgrel = 3
+	pkgrel = 4
 	url = https://github.com/TenkyuChimata/linux-wireless-reg-unlocked
 	install = linux-wireless-reg-unlocked.install
 	arch = x86_64
