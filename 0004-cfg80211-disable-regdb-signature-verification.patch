@@ -1,0 +1,13 @@
+--- orig/net/wireless/reg.c	2026-03-25 17:20:27.236094904 +0800
++++ mod/net/wireless/reg.c	2026-03-25 17:16:57.730477066 +0800
+@@ -826,8 +826,8 @@
+ 	if (hdr->version != cpu_to_be32(FWDB_VERSION))
+ 		return false;
+ 
+-	if (!regdb_has_valid_signature(data, size))
+-		return false;
++	/* if (!regdb_has_valid_signature(data, size))
++		return false; */
+ 
+ 	country = &hdr->country[0];
+ 	while ((u8 *)(country + 1) <= data + size) {
