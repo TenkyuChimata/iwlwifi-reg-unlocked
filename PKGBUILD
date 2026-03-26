@@ -7,7 +7,7 @@ _archrel=$(printf '%s\n' "${_kernelpkgver}" | sed -E "s/^${_kernver}\.(.*)$/\1/"
 _krel="${_kernver}-${_archrel}"
 
 pkgver="${_kernver}"
-pkgrel=4
+pkgrel=5
 pkgdesc="Patched iwlwifi and cfg80211 modules with LAR disable and modified regulatory behavior for Arch Linux"
 arch=('x86_64')
 url="https://github.com/TenkyuChimata/linux-wireless-reg-unlocked"
@@ -36,8 +36,7 @@ source=(
   "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-${_kernver}.tar.xz"
   '0001-iwlwifi-add-lar_disable.patch'
   '0002-iwlwifi-unlock-6ghz-and-noir.patch'
-  '0003-cfg80211-disable-regdom-intersect-and-ignore-hints.patch'
-  '0004-cfg80211-disable-regdb-signature-verification.patch'
+  '0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch'
   'iwlwifi-lar.conf'
   'dracut-wireless-reg-unlocked.conf'
 )
@@ -46,8 +45,7 @@ sha256sums=(
   'c16068a3af12e3943dee3b1eef57ca70229c069128bfa1184fb3f48b219d55bf'
   'da2ab52ccdef2b93088c9e0c56bc1c166bf748d021b529cb2af2ff6c5d9e85cc'
   '8510a7a2b69f696999efddb40c79f3735049406d0f8432c2a23dd3f58ab8f883'
-  'ef26436f30412184a8af4418f7deb00992ef7624d9dc4960d9730e56ed2cee25'
-  '28f2defefbeaa0ec8cd1709981d1f5a31f3de9ae7ff178d0780cb26dd07195d5'
+  'e8574dead1cb1f2b3732b0daeffa5bb9d71e1cc8eee5203348bbe9169c5adbe6'
   'd0f468221c28f5f07a040f36df4dcf571d3931eef7ed273d4e57b631ef9540d3'
   '3758f059f40e24561f588829cb80384324d75b0745d5eba6f4b6313b5809e2d1'
 )
@@ -60,8 +58,7 @@ prepare() {
 
   patch -Np1 -i "${srcdir}/0001-iwlwifi-add-lar_disable.patch"
   patch -Np1 -i "${srcdir}/0002-iwlwifi-unlock-6ghz-and-noir.patch"
-  patch -Np1 -i "${srcdir}/0003-cfg80211-disable-regdom-intersect-and-ignore-hints.patch"
-  patch -Np1 -i "${srcdir}/0004-cfg80211-disable-regdb-signature-verification.patch"
+  patch -Np1 -i "${srcdir}/0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch"
 
   # Fix relative source references for out-of-tree module builds
   if [[ -f drivers/net/wireless/intel/iwlwifi/dvm/Makefile ]]; then
