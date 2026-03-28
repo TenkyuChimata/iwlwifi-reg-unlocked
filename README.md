@@ -23,10 +23,8 @@ This project provides external kernel modules for Arch Linux that modify both th
 ### cfg80211 (regulatory layer)
 
 - Allow unsigned regulatory database (regdb)
-- Disable regulatory intersection logic
 - Ignore driver-provided regulatory hints
 - Ignore Country IE regulatory updates
-- Prevent cfg80211 from overriding driver-exposed capabilities
 
 ---
 
@@ -117,7 +115,6 @@ Note: cfg80211 regulatory enforcement is partially bypassed, so this may not beh
 ### 3. cfg80211 / regulatory
 
 - `net/wireless/reg.c`
-  - Disables regulatory domain intersection
   - Ignores driver regulatory hints
   - Ignores Country IE updates
   - Allows non-signed regulatory database usage
