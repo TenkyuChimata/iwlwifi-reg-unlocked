@@ -1,22 +1,32 @@
 # linux-wireless-reg-unlocked
 
-Patched Intel **iwlwifi** and Linux **cfg80211/regulatory** components to relax wireless restrictions and expose additional capabilities.
+Patched Intel **iwlwifi** and Linux **cfg80211/regulatory** subsystems to override firmware and regulatory restrictions, exposing additional Wi-Fi capabilities (including 6 GHz).
 
-This project provides external kernel modules for Arch Linux that modify both the Intel iwlwifi driver and the cfg80211 regulatory layer, allowing advanced users greater control over Wi-Fi behavior without rebuilding the full kernel.
+This project provides external kernel modules for Arch Linux that modify both the Intel iwlwifi driver and the cfg80211 regulatory layer, allowing advanced users to bypass multiple layers of wireless restriction without rebuilding the full kernel.
 
 ---
 
 ## 🚀 Features
 
-- Add `lar_disable` module parameter to iwlwifi
+### iwlwifi (driver / NVM layer)
+
+- Add `lar_disable` module parameter
 - Disable Intel iwlwifi LAR (Location Aware Regulatory)
-- Expose channels normally filtered by NVM validity checks
-- Remove multiple bandwidth and transmit restrictions
-- Remove `NO_IR` limitations (allow AP / initiating transmissions)
-- Force-enable 6 GHz VLP AP capability
-- Reduce cfg80211 regulatory intersection enforcement
-- Ignore driver and Country-IE regulatory hints
-- Built as external kernel modules (no full kernel rebuild required)
+- Override NVM channel flags:
+  - Force-enable `NVM_CHANNEL_VALID`
+  - Force-enable active transmission (`ACTIVE`, `IBSS`)
+  - Remove `NO_IR` restrictions (allow AP / initiating transmissions)
+- Expose channels normally filtered out by firmware/NVM
+- Relax channel capability restrictions (bandwidth / usage)
+- Force-enable additional 6 GHz channel capabilities (VLP / AFC related flags)
+
+### cfg80211 (regulatory layer)
+
+- Allow unsigned regulatory database (regdb)
+- Disable regulatory intersection logic
+- Ignore driver-provided regulatory hints
+- Ignore Country IE regulatory updates
+- Prevent cfg80211 from overriding driver-exposed capabilities
 
 ---
 
@@ -24,13 +34,21 @@ This project provides external kernel modules for Arch Linux that modify both th
 
 > 🚨 IMPORTANT
 
-This project intentionally bypasses regulatory enforcement mechanisms.
+This project **intentionally bypasses regulatory enforcement mechanisms** at multiple layers:
 
-- May violate local wireless communication laws
-- May cause interference with licensed spectrum users
-- Not certified for production or commercial use
+- Firmware (NVM interpretation)
+- Driver (iwlwifi)
+- Kernel regulatory layer (cfg80211)
 
-Use at your own risk. You are responsible for complying with local regulations.
+This may:
+
+- Violate local wireless communication laws
+- Cause interference with licensed spectrum users (e.g. DFS radar bands)
+- Enable transmission where it is normally prohibited
+
+This project is **for research and experimental purposes only**.
+
+You are fully responsible for compliance with local regulations.
 
 ---
 
@@ -62,7 +80,7 @@ Verify module parameter:
 modinfo iwlwifi | grep lar_disable
 ```
 
-Check regulatory state:
+Check regulatory and channel state:
 
 ```bash
 iw reg get
@@ -75,41 +93,50 @@ You may still manually set a regulatory domain:
 sudo iw reg set JP
 ```
 
+Note: cfg80211 regulatory enforcement is partially bypassed, so this may not behave as on stock systems.
+
 ---
 
 ## 📡 What is modified
 
-### iwlwifi layer
+### 1. iwlwifi (NVM parsing layer)
 
-- Optional LAR disable via module parameter
-- Skip selected invalid channel filtering
-- Remove NO_IR-related transmit restrictions
-- Relax bandwidth and regulatory capability checks
-- Force-enable 6 GHz VLP AP capability
+- `iwl-nvm-parse.c`
+  - Overrides firmware-provided channel flags
+  - Forces channels to be treated as valid and usable
+  - Removes `NO_IR` restrictions
+  - Modifies channel capability flags (bandwidth / usage)
+  - Enables additional 6 GHz capabilities
 
-### cfg80211 layer
+### 2. iwlwifi (driver behavior)
 
-- Bypass regulatory domain intersection logic
-- Ignore driver-provided regulatory hints
-- Ignore Country IE regulatory updates
+- Adds `lar_disable` parameter
+- Treats LAR as disabled when requested
+- Prevents firmware-driven regulatory updates from restricting operation
+
+### 3. cfg80211 / regulatory
+
+- `net/wireless/reg.c`
+  - Disables regulatory domain intersection
+  - Ignores driver regulatory hints
+  - Ignores Country IE updates
+  - Allows non-signed regulatory database usage
 
 ---
 
 ## 🧩 How it works
 
-This project patches:
+This project modifies multiple enforcement layers:
 
-- `drivers/net/wireless/intel/iwlwifi/*`
-- `drivers/net/wireless/intel/iwlwifi/mvm/*`
-- `net/wireless/reg.c`
+| Layer          | Behavior                                         |
+| -------------- | ------------------------------------------------ |
+| Firmware (NVM) | Channel validity and capability flags overridden |
+| iwlwifi        | LAR disabled and channel filtering bypassed      |
+| cfg80211       | Regulatory merging and enforcement disabled      |
 
-Key behavior changes include:
+Key idea:
 
-- Treat LAR as disabled when requested
-- Expose channels normally filtered out
-- Remove multiple regulatory-based restrictions
-- Force-enable selected 6 GHz capabilities
-- Bypass cfg80211 regulatory merging and overrides
+> Instead of trusting firmware/regulatory input, the driver forces channels and capabilities to be available.
 
 ---
 
@@ -121,8 +148,9 @@ Key behavior changes include:
 
 ## ⚠️ Known limitations
 
-- 5 GHz and 6 GHz AP operation may still be restricted by firmware
-- Hardware/firmware may prevent actual transmission on some channels
+- Firmware may still block actual RF transmission on some channels
 - Displayed capabilities may exceed real hardware capability
-- Behavior may vary across different Intel chipsets and firmware versions
+- 5 GHz / 6 GHz AP operation may still fail depending on firmware
+- AFC / VLP behavior may not fully match real regulatory requirements
+- Behavior varies across firmware versions and chipsets
 - Future kernel updates may break patch compatibility
