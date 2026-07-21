@@ -51,6 +51,26 @@ jobs:
           fetch-depth: 0
           ref: ${{ github.event.repository.default_branch }}
 
+      - name: Verify checked-out repository
+        run: |
+          set -Eeuo pipefail
+
+          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+
+          if [[ ! -d "${GITHUB_WORKSPACE}/.git" ]]; then
+            echo "::error::Checkout did not create a Git repository in GITHUB_WORKSPACE"
+            find "${GITHUB_WORKSPACE}" -maxdepth 2 -print || true
+            exit 1
+          fi
+
+          git config \
+            --global \
+            --add safe.directory \
+            "${GITHUB_WORKSPACE}"
+
+          git -C "${GITHUB_WORKSPACE}" rev-parse --show-toplevel
+          git -C "${GITHUB_WORKSPACE}" status --short
+
       - name: Install update tools
         run: |
           set -Eeuo pipefail
@@ -68,8 +88,10 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          cd "${GITHUB_WORKSPACE}"
+
           chmod +x scripts/update-arch-kernel.sh
-          scripts/update-arch-kernel.sh
+          ./scripts/update-arch-kernel.sh
 
       - name: Plan workflow
         id: plan
@@ -134,6 +156,23 @@ jobs:
             exit 1
           fi
 
+          build_directory="$(
+            find /usr/lib/modules \
+              -mindepth 2 \
+              -maxdepth 2 \
+              -type d \
+              -name build \
+              -print \
+              -quit
+          )"
+
+          if [[ -z "${build_directory}" ]]; then
+            echo "::error::linux-headers did not provide a kernel build directory"
+            exit 1
+          fi
+
+          echo "Kernel build directory: ${build_directory}"
+
       - name: Create unprivileged build user
         if: steps.plan.outputs.build == 'true'
         run: |
@@ -190,17 +229,37 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          readonly repo="${GITHUB_WORKSPACE}"
+
+          if [[ ! -d "${repo}/.git" ]]; then
+            echo "::error::Git repository is missing from ${repo}"
+            exit 1
+          fi
+
+          cd "${repo}"
+
           git config \
             --global \
             --add safe.directory \
-            "${GITHUB_WORKSPACE}"
+            "${repo}"
 
-          git diff --check
+          echo "Current directory:"
+          pwd
 
-          namcap PKGBUILD || true
+          echo "Git repository root:"
+          git -C "${repo}" rev-parse --show-toplevel
+
+          echo "Repository status:"
+          git -C "${repo}" status --short
+
+          # 使用 -C 明确指定仓库，避免当前工作目录漂移。
+          git -C "${repo}" diff --check
+
+          # namcap 的部分外部内核模块警告仅作报告，不阻止发布。
+          namcap "${repo}/PKGBUILD" || true
 
           package_file="$(
-            find "${GITHUB_WORKSPACE}" \
+            find "${repo}" \
               -maxdepth 1 \
               -type f \
               -name '*.pkg.tar.*' \
@@ -223,30 +282,42 @@ jobs:
         run: |
           set -Eeuo pipefail
 
+          readonly repo="${GITHUB_WORKSPACE}"
+
+          if [[ ! -d "${repo}/.git" ]]; then
+            echo "::error::Git repository is missing from ${repo}"
+            exit 1
+          fi
+
+          cd "${repo}"
+
           git config \
             --global \
             --add safe.directory \
-            "${GITHUB_WORKSPACE}"
+            "${repo}"
 
-          git config \
+          git -C "${repo}" config \
             user.name \
             "github-actions[bot]"
 
-          git config \
+          git -C "${repo}" config \
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add \
+          git -C "${repo}" add \
             PKGBUILD \
             .SRCINFO
 
-          if git diff --cached --quiet; then
+          if git -C "${repo}" diff --cached --quiet; then
             echo "No GitHub package metadata changes to commit."
           else
-            git commit \
+            echo "Changes to commit:"
+            git -C "${repo}" diff --cached --stat
+
+            git -C "${repo}" commit \
               -m "Update to linux ${{ steps.update.outputs.kernelpkgver }}"
 
-            git push \
+            git -C "${repo}" push \
               origin \
               "HEAD:${GITHUB_DEFAULT_BRANCH}"
           fi
@@ -269,6 +340,7 @@ jobs:
           rm -rf "${ssh_dir}"
           install -d -m 700 "${ssh_dir}"
 
+          # 删除从 Windows 环境复制私钥时可能混入的 CR 字符。
           printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" \
             | tr -d '\r' \
             > "${ssh_dir}/id_ed25519"
@@ -300,8 +372,8 @@ jobs:
           actual_fingerprints="$(
             ssh-keygen \
               -lf "${ssh_dir}/known_hosts" \
-              -E sha256 \
-              | awk '{print $2}'
+              -E sha256 |
+              awk '{print $2}'
           )"
 
           echo "Expected AUR fingerprint:"
@@ -338,6 +410,7 @@ jobs:
           echo "AUR_SSH_DIR=${ssh_dir}" \
             >> "${GITHUB_ENV}"
 
+          # 在真正 clone 之前检查主机密钥和账户授权。
           ssh \
             -T \
             -F "${ssh_dir}/config" \
@@ -356,15 +429,25 @@ jobs:
 
           export GIT_SSH_COMMAND="ssh -F ${AUR_SSH_DIR}/config"
 
+          readonly repo="${GITHUB_WORKSPACE}"
           readonly aur_dir="/tmp/aur-package"
           readonly staging_dir="/tmp/aur-package-staging"
+
+          if [[ ! -f "${repo}/PKGBUILD" ]]; then
+            echo "::error::PKGBUILD is missing from ${repo}"
+            exit 1
+          fi
+
+          if [[ ! -f "${repo}/.SRCINFO" ]]; then
+            echo "::error::.SRCINFO is missing from ${repo}"
+            exit 1
+          fi
 
           rm -rf \
             "${aur_dir}" \
             "${staging_dir}"
 
-          # 对于尚未存在的包，这里会克隆一个空仓库；
-          # 第一次成功 push 后即完成 AUR 包创建。
+          # 对尚未创建的 pkgbase，AUR 会返回一个空 Git 仓库。
           git \
             -c init.defaultBranch=master \
             clone \
@@ -376,7 +459,7 @@ jobs:
             -m 755 \
             "${staging_dir}"
 
-          # AUR 仓库不允许子目录，只同步这些顶层打包文件。
+          # AUR 仓库禁止子目录，因此只同步以下顶层文件。
           package_files=(
             PKGBUILD
             .SRCINFO
@@ -390,7 +473,7 @@ jobs:
           )
 
           for file in "${package_files[@]}"; do
-            source_path="${GITHUB_WORKSPACE}/${file}"
+            source_path="${repo}/${file}"
 
             if [[ ! -f "${source_path}" ]]; then
               echo "::error::Required AUR package file is missing: ${file}"
@@ -403,7 +486,7 @@ jobs:
               "${staging_dir}/${file}"
           done
 
-          # 让 AUR 工作树精确匹配上述白名单，同时保留 .git。
+          # 精确同步白名单，同时保留 AUR 仓库自身的 .git。
           rsync \
             --archive \
             --delete \
@@ -443,8 +526,14 @@ jobs:
           echo "Files to publish to AUR:"
           git status --short
 
+          if git rev-parse --verify HEAD >/dev/null 2>&1; then
+            commit_message="Update to linux ${kernel_version}"
+          else
+            commit_message="Initial release for linux ${kernel_version}"
+          fi
+
           git commit \
-            -m "Initial release for linux ${kernel_version}"
+            -m "${commit_message}"
 
           git push \
             origin \
