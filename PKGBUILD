@@ -1,14 +1,26 @@
 pkgname=linux-wireless-reg-unlocked
 _pkgbase=linux
 
-_kernelpkgver=$(pacman -Q "${_pkgbase}" | awk '{print $2}')
-_kernver=$(printf '%s\n' "${_kernelpkgver}" | sed 's/\.arch[0-9].*//')
-_archrel=$(printf '%s\n' "${_kernelpkgver}" | sed -E "s/^${_kernver}\.(.*)$/\1/" | tr '.' '-')
+_kernelpkgver=7.1.4.arch1-1
+
+_kernver="$(
+  printf '%s\n' "${_kernelpkgver}" |
+    sed 's/\.arch[0-9].*//'
+)"
+
+_archrel="$(
+  printf '%s\n' "${_kernelpkgver}" |
+    sed -E "s/^${_kernver}\.(.*)$/\1/" |
+    tr '.' '-'
+)"
+
+_kernelmajor="${_kernver%%.*}"
 _krel="${_kernver}-${_archrel}"
 
 pkgver="${_kernver}"
 pkgrel=1
-pkgdesc="Patched iwlwifi and cfg80211 modules with LAR disable and modified regulatory behavior for Arch Linux"
+
+pkgdesc="Research-only patched iwlwifi and cfg80211 modules with modified wireless regulatory behavior for Arch Linux"
 arch=('x86_64')
 url="https://github.com/TenkyuChimata/linux-wireless-reg-unlocked"
 license=('GPL-2.0-only')
@@ -19,6 +31,12 @@ depends=(
   'zstd'
 )
 
+makedepends=(
+  'bc'
+  'kmod'
+  'patch'
+)
+
 optdepends=(
   'mkinitcpio: rebuild initramfs for mkinitcpio-based systems'
   'dracut: rebuild initramfs or UKI for dracut-based systems'
@@ -26,14 +44,12 @@ optdepends=(
   'sbctl: re-sign boot artifacts for Secure Boot systems if needed'
 )
 
-makedepends=(
-  'bc'
-  'kmod'
-  'patch'
+conflicts=(
+  'iwlwifi-lar-patched'
 )
 
 source=(
-  "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-${_kernver}.tar.xz"
+  "https://cdn.kernel.org/pub/linux/kernel/v${_kernelmajor}.x/linux-${_kernver}.tar.xz"
   '0001-iwlwifi-add-lar_disable.patch'
   '0002-iwlwifi-nvm-unlock-6ghz-and-relax-channel-flags.patch'
   '0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch'
@@ -41,14 +57,12 @@ source=(
   'dracut-wireless-reg-unlocked.conf'
 )
 
-sha256sums=(
-  '1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e'
-  'da2ab52ccdef2b93088c9e0c56bc1c166bf748d021b529cb2af2ff6c5d9e85cc'
-  '96f91b3ff8d5caafe4939cb22bb455d34d107d08e14cf3af6dbb47ef70553732'
-  'e8574dead1cb1f2b3732b0daeffa5bb9d71e1cc8eee5203348bbe9169c5adbe6'
-  'd0f468221c28f5f07a040f36df4dcf571d3931eef7ed273d4e57b631ef9540d3'
-  '3758f059f40e24561f588829cb80384324d75b0745d5eba6f4b6313b5809e2d1'
-)
+sha256sums=('1c63922a119675d38e3ae0f8f6ee07f15c41a786ab9ed66563749bb8c9a08e2e'
+            'da2ab52ccdef2b93088c9e0c56bc1c166bf748d021b529cb2af2ff6c5d9e85cc'
+            '96f91b3ff8d5caafe4939cb22bb455d34d107d08e14cf3af6dbb47ef70553732'
+            'e8574dead1cb1f2b3732b0daeffa5bb9d71e1cc8eee5203348bbe9169c5adbe6'
+            'd0f468221c28f5f07a040f36df4dcf571d3931eef7ed273d4e57b631ef9540d3'
+            '3758f059f40e24561f588829cb80384324d75b0745d5eba6f4b6313b5809e2d1')
 
 install="${pkgname}.install"
 options=(!debug)
@@ -56,21 +70,31 @@ options=(!debug)
 prepare() {
   cd "${srcdir}/linux-${_kernver}"
 
-  patch -Np1 -i "${srcdir}/0001-iwlwifi-add-lar_disable.patch"
-  patch -Np1 -i "${srcdir}/0002-iwlwifi-nvm-unlock-6ghz-and-relax-channel-flags.patch"
-  patch -Np1 -i "${srcdir}/0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch"
+  patch -Np1 \
+    -i "${srcdir}/0001-iwlwifi-add-lar_disable.patch"
 
-  # Fix relative source references for out-of-tree module builds
+  patch -Np1 \
+    -i "${srcdir}/0002-iwlwifi-nvm-unlock-6ghz-and-relax-channel-flags.patch"
+
+  patch -Np1 \
+    -i "${srcdir}/0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch"
+
   if [[ -f drivers/net/wireless/intel/iwlwifi/dvm/Makefile ]]; then
-    sed -i 's|$(srctree)/||g' drivers/net/wireless/intel/iwlwifi/dvm/Makefile
+    sed -i \
+      's|$(srctree)/||g' \
+      drivers/net/wireless/intel/iwlwifi/dvm/Makefile
   fi
 
   if [[ -f drivers/net/wireless/intel/iwlwifi/mvm/Makefile ]]; then
-    sed -i 's|$(srctree)/||g' drivers/net/wireless/intel/iwlwifi/mvm/Makefile
+    sed -i \
+      's|$(srctree)/||g' \
+      drivers/net/wireless/intel/iwlwifi/mvm/Makefile
   fi
 
   if [[ -f drivers/net/wireless/intel/iwlwifi/mld/Makefile ]]; then
-    sed -i 's|$(srctree)/||g' drivers/net/wireless/intel/iwlwifi/mld/Makefile
+    sed -i \
+      's|$(srctree)/||g' \
+      drivers/net/wireless/intel/iwlwifi/mld/Makefile
   fi
 }
 
@@ -124,22 +148,33 @@ package() {
 
   install -dm755 "${moddir}"
 
-  # Core Intel wireless modules
-  install -m644 "${iwlsrc}/iwlwifi.ko" "${moddir}/iwlwifi.ko"
-  install -m644 "${iwlsrc}/mvm/iwlmvm.ko" "${moddir}/iwlmvm.ko"
+  # Intel wireless core modules
+  install -m644 \
+    "${iwlsrc}/iwlwifi.ko" \
+    "${moddir}/iwlwifi.ko"
+
+  install -m644 \
+    "${iwlsrc}/mvm/iwlmvm.ko" \
+    "${moddir}/iwlmvm.ko"
 
   if [[ -f "${iwlsrc}/dvm/iwldvm.ko" ]]; then
-    install -m644 "${iwlsrc}/dvm/iwldvm.ko" "${moddir}/iwldvm.ko"
+    install -m644 \
+      "${iwlsrc}/dvm/iwldvm.ko" \
+      "${moddir}/iwldvm.ko"
   fi
 
   if [[ -f "${iwlsrc}/mld/iwlmld.ko" ]]; then
-    install -m644 "${iwlsrc}/mld/iwlmld.ko" "${moddir}/iwlmld.ko"
+    install -m644 \
+      "${iwlsrc}/mld/iwlmld.ko" \
+      "${moddir}/iwlmld.ko"
   fi
 
   # Patched cfg80211
-  install -m644 "${cfgsrc}/cfg80211.ko" "${moddir}/cfg80211.ko"
+  install -m644 \
+    "${cfgsrc}/cfg80211.ko" \
+    "${moddir}/cfg80211.ko"
 
-  # Strip debug symbols from packaged modules
+  # Strip debug symbols
   strip --strip-debug "${moddir}/iwlwifi.ko" || true
   strip --strip-debug "${moddir}/iwlmvm.ko" || true
   strip --strip-debug "${moddir}/cfg80211.ko" || true
@@ -152,15 +187,14 @@ package() {
     strip --strip-debug "${moddir}/iwlmld.ko" || true
   fi
 
-  # modprobe configuration
-  install -Dm644 "${srcdir}/iwlwifi-lar.conf" \
+  install -Dm644 \
+    "${srcdir}/iwlwifi-lar.conf" \
     "${pkgdir}/etc/modprobe.d/iwlwifi-lar.conf"
 
-  # optional dracut configuration
-  install -Dm644 "${srcdir}/dracut-wireless-reg-unlocked.conf" \
+  install -Dm644 \
+    "${srcdir}/dracut-wireless-reg-unlocked.conf" \
     "${pkgdir}/etc/dracut.conf.d/wireless-reg-unlocked.conf"
 
-  # persist built kernel release for .install script
   install -Dm644 /dev/stdin \
     "${pkgdir}/usr/share/${pkgname}/kernel-version" <<EOF
 ${_krel}

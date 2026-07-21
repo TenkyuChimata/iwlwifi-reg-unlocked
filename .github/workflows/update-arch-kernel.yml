@@ -1,0 +1,451 @@
+name: Update Arch Linux kernel package
+
+on:
+  schedule:
+    # 每小时第 43 分钟检查，避开整点任务高峰
+    - cron: "43 * * * *"
+
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: Build and validate even when the kernel version is unchanged
+        required: false
+        type: boolean
+        default: true
+
+      force_publish:
+        description: Synchronize the current package files to AUR
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-arch-kernel
+  cancel-in-progress: false
+
+jobs:
+  update:
+    name: Check, build and publish
+    runs-on: ubuntu-latest
+
+    container:
+      image: archlinux:base-devel
+
+    defaults:
+      run:
+        shell: bash
+
+    env:
+      AUR_PACKAGE_NAME: linux-wireless-reg-unlocked
+      AUR_GIT_NAME: TenkyuChimata
+      AUR_GIT_EMAIL: tenkyuchimata@users.noreply.github.com
+      GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install update tools
+        run: |
+          set -Eeuo pipefail
+
+          pacman -Syu --noconfirm --needed \
+            curl \
+            git \
+            jq \
+            openssh \
+            pacman-contrib \
+            rsync
+
+      - name: Check latest Arch kernel
+        id: update
+        run: |
+          set -Eeuo pipefail
+
+          chmod +x scripts/update-arch-kernel.sh
+          scripts/update-arch-kernel.sh
+
+      - name: Plan workflow
+        id: plan
+        env:
+          KERNEL_CHANGED: ${{ steps.update.outputs.changed }}
+          EVENT_NAME: ${{ github.event_name }}
+          FORCE_BUILD: ${{ inputs.force_build }}
+          FORCE_PUBLISH: ${{ inputs.force_publish }}
+        run: |
+          set -Eeuo pipefail
+
+          build=false
+          publish=false
+
+          if [[ "${KERNEL_CHANGED}" == "true" ]]; then
+            build=true
+            publish=true
+          fi
+
+          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${FORCE_BUILD:-false}" == "true" ]]; then
+              build=true
+            fi
+
+            if [[ "${FORCE_PUBLISH:-false}" == "true" ]]; then
+              publish=true
+            fi
+          fi
+
+          echo "build=${build}" >> "${GITHUB_OUTPUT}"
+          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
+
+          echo "Kernel changed: ${KERNEL_CHANGED}"
+          echo "Build package:  ${build}"
+          echo "Publish to AUR: ${publish}"
+
+      - name: Install kernel build dependencies
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          pacman -S --noconfirm --needed \
+            bc \
+            kmod \
+            linux \
+            linux-headers \
+            namcap \
+            patch
+
+          installed_kernel="$(
+            pacman -Q linux |
+              awk '{print $2}'
+          )"
+
+          expected_kernel="${{ steps.update.outputs.kernelpkgver }}"
+
+          echo "Installed kernel package: ${installed_kernel}"
+          echo "Expected kernel package:  ${expected_kernel}"
+
+          if [[ "${installed_kernel}" != "${expected_kernel}" ]]; then
+            echo "::error::Arch mirror is not synchronized with archlinux.org"
+            exit 1
+          fi
+
+      - name: Create unprivileged build user
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          if ! id builder >/dev/null 2>&1; then
+            useradd --create-home builder
+          fi
+
+          chown -R builder:builder "${GITHUB_WORKSPACE}"
+
+      - name: Update checksums
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          runuser -u builder -- \
+            bash -lc "
+              set -Eeuo pipefail
+              cd '${GITHUB_WORKSPACE}'
+              updpkgsums
+            "
+
+      - name: Build package
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          runuser -u builder -- \
+            bash -lc "
+              set -Eeuo pipefail
+              cd '${GITHUB_WORKSPACE}'
+
+              makepkg \
+                --cleanbuild \
+                --clean \
+                --noconfirm
+            "
+
+      - name: Regenerate .SRCINFO
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          runuser -u builder -- \
+            bash -lc "
+              set -Eeuo pipefail
+              cd '${GITHUB_WORKSPACE}'
+              makepkg --printsrcinfo > .SRCINFO
+            "
+
+      - name: Run packaging checks
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          git config \
+            --global \
+            --add safe.directory \
+            "${GITHUB_WORKSPACE}"
+
+          git diff --check
+
+          namcap PKGBUILD || true
+
+          package_file="$(
+            find "${GITHUB_WORKSPACE}" \
+              -maxdepth 1 \
+              -type f \
+              -name '*.pkg.tar.*' \
+              -print \
+              -quit
+          )"
+
+          if [[ -z "${package_file}" ]]; then
+            echo "::error::makepkg completed without producing a package"
+            exit 1
+          fi
+
+          echo "Built package:"
+          echo "  ${package_file}"
+
+          namcap "${package_file}" || true
+
+      - name: Commit and push GitHub update
+        if: steps.plan.outputs.build == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          git config \
+            --global \
+            --add safe.directory \
+            "${GITHUB_WORKSPACE}"
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
+          git config \
+            user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            PKGBUILD \
+            .SRCINFO
+
+          if git diff --cached --quiet; then
+            echo "No GitHub package metadata changes to commit."
+          else
+            git commit \
+              -m "Update to linux ${{ steps.update.outputs.kernelpkgver }}"
+
+            git push \
+              origin \
+              "HEAD:${GITHUB_DEFAULT_BRANCH}"
+          fi
+
+      - name: Configure AUR SSH authentication
+        if: steps.plan.outputs.publish == 'true'
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          set -Eeuo pipefail
+
+          readonly ssh_dir="/tmp/aur-ssh"
+          readonly expected_fingerprint="SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4"
+
+          if [[ -z "${AUR_SSH_PRIVATE_KEY:-}" ]]; then
+            echo "::error::GitHub secret AUR_SSH_PRIVATE_KEY is empty or missing"
+            exit 1
+          fi
+
+          rm -rf "${ssh_dir}"
+          install -d -m 700 "${ssh_dir}"
+
+          printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" \
+            | tr -d '\r' \
+            > "${ssh_dir}/id_ed25519"
+
+          chmod 600 "${ssh_dir}/id_ed25519"
+
+          if ! ssh-keygen \
+            -y \
+            -f "${ssh_dir}/id_ed25519" \
+            >/dev/null; then
+            echo "::error::AUR_SSH_PRIVATE_KEY is not a valid OpenSSH private key"
+            exit 1
+          fi
+
+          ssh-keyscan \
+            -T 20 \
+            -t ed25519 \
+            aur.archlinux.org \
+            2>/dev/null \
+            > "${ssh_dir}/known_hosts"
+
+          if [[ ! -s "${ssh_dir}/known_hosts" ]]; then
+            echo "::error::ssh-keyscan did not return an AUR host key"
+            exit 1
+          fi
+
+          chmod 600 "${ssh_dir}/known_hosts"
+
+          actual_fingerprints="$(
+            ssh-keygen \
+              -lf "${ssh_dir}/known_hosts" \
+              -E sha256 \
+              | awk '{print $2}'
+          )"
+
+          echo "Expected AUR fingerprint:"
+          echo "  ${expected_fingerprint}"
+
+          echo "Received AUR fingerprints:"
+          while IFS= read -r fingerprint; do
+            echo "  ${fingerprint}"
+          done <<< "${actual_fingerprints}"
+
+          if ! grep \
+            -Fqx \
+            "${expected_fingerprint}" \
+            <<< "${actual_fingerprints}"; then
+            echo "::error::AUR SSH host-key fingerprint mismatch"
+            exit 1
+          fi
+
+          cat > "${ssh_dir}/config" <<EOF
+          Host aur.archlinux.org
+              HostName aur.archlinux.org
+              User aur
+              IdentityFile ${ssh_dir}/id_ed25519
+              IdentityAgent none
+              IdentitiesOnly yes
+              UserKnownHostsFile ${ssh_dir}/known_hosts
+              StrictHostKeyChecking yes
+              BatchMode yes
+              LogLevel ERROR
+          EOF
+
+          chmod 600 "${ssh_dir}/config"
+
+          echo "AUR_SSH_DIR=${ssh_dir}" \
+            >> "${GITHUB_ENV}"
+
+          ssh \
+            -T \
+            -F "${ssh_dir}/config" \
+            aur.archlinux.org \
+            help
+
+      - name: Synchronize AUR repository
+        if: steps.plan.outputs.publish == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          if [[ -z "${AUR_SSH_DIR:-}" ]]; then
+            echo "::error::AUR SSH configuration was not initialized"
+            exit 1
+          fi
+
+          export GIT_SSH_COMMAND="ssh -F ${AUR_SSH_DIR}/config"
+
+          readonly aur_dir="/tmp/aur-package"
+          readonly staging_dir="/tmp/aur-package-staging"
+
+          rm -rf \
+            "${aur_dir}" \
+            "${staging_dir}"
+
+          # 对于尚未存在的包，这里会克隆一个空仓库；
+          # 第一次成功 push 后即完成 AUR 包创建。
+          git \
+            -c init.defaultBranch=master \
+            clone \
+            "ssh://aur@aur.archlinux.org/${AUR_PACKAGE_NAME}.git" \
+            "${aur_dir}"
+
+          install \
+            -d \
+            -m 755 \
+            "${staging_dir}"
+
+          # AUR 仓库不允许子目录，只同步这些顶层打包文件。
+          package_files=(
+            PKGBUILD
+            .SRCINFO
+            LICENSE
+            linux-wireless-reg-unlocked.install
+            0001-iwlwifi-add-lar_disable.patch
+            0002-iwlwifi-nvm-unlock-6ghz-and-relax-channel-flags.patch
+            0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch
+            iwlwifi-lar.conf
+            dracut-wireless-reg-unlocked.conf
+          )
+
+          for file in "${package_files[@]}"; do
+            source_path="${GITHUB_WORKSPACE}/${file}"
+
+            if [[ ! -f "${source_path}" ]]; then
+              echo "::error::Required AUR package file is missing: ${file}"
+              exit 1
+            fi
+
+            install \
+              -m 644 \
+              "${source_path}" \
+              "${staging_dir}/${file}"
+          done
+
+          # 让 AUR 工作树精确匹配上述白名单，同时保留 .git。
+          rsync \
+            --archive \
+            --delete \
+            --exclude='.git/' \
+            "${staging_dir}/" \
+            "${aur_dir}/"
+
+          cd "${aur_dir}"
+
+          git config \
+            user.name \
+            "${AUR_GIT_NAME}"
+
+          git config \
+            user.email \
+            "${AUR_GIT_EMAIL}"
+
+          git add --all
+
+          if git diff --cached --quiet; then
+            echo "AUR repository is already synchronized."
+            exit 0
+          fi
+
+          kernel_version="$(
+            sed -nE \
+              's/^_kernelpkgver="?([^"]+)"?$/\1/p' \
+              PKGBUILD |
+              head -n 1
+          )"
+
+          if [[ -z "${kernel_version}" ]]; then
+            echo "::error::Could not read _kernelpkgver from PKGBUILD"
+            exit 1
+          fi
+
+          echo "Files to publish to AUR:"
+          git status --short
+
+          git commit \
+            -m "Initial release for linux ${kernel_version}"
+
+          git push \
+            origin \
+            HEAD:master
