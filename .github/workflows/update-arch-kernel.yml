@@ -2,22 +2,10 @@ name: Update Arch Linux kernel package
 
 on:
   schedule:
-    # 每小时第 43 分钟检查，避开整点任务高峰
+    # 每小时第 43 分钟检查，避开整点高峰
     - cron: "43 * * * *"
 
   workflow_dispatch:
-    inputs:
-      force_build:
-        description: Build and validate even when the kernel version is unchanged
-        required: false
-        type: boolean
-        default: true
-
-      force_publish:
-        description: Synchronize the current package files to AUR
-        required: false
-        type: boolean
-        default: true
 
 permissions:
   contents: write
@@ -34,6 +22,8 @@ jobs:
     container:
       image: archlinux:base-devel
 
+    # GitHub Actions 在 container 中默认使用 sh；
+    # 本工作流使用 Bash 数组、[[ ]] 和 pipefail，因此强制使用 bash。
     defaults:
       run:
         shell: bash
@@ -43,11 +33,13 @@ jobs:
       AUR_GIT_NAME: TenkyuChimata
       AUR_GIT_EMAIL: tenkyuchimata@users.noreply.github.com
       GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      PACKAGE_BUILD_DIR: /tmp/linux-wireless-reg-unlocked-build
 
     steps:
-      # 必须先在 Arch 容器里安装 Git。
-      # 否则 actions/checkout 会退回 REST 下载，不会创建 .git。
-      - name: Install bootstrap and update tools
+      # archlinux:base-devel 默认不保证包含 Git。
+      # 必须先安装 Git，再运行 actions/checkout；否则 checkout 可能无法
+      # 创建正常的 Git 工作树，后续也无法使用 git 命令。
+      - name: Install checkout and update tools
         run: |
           set -Eeuo pipefail
 
@@ -63,38 +55,39 @@ jobs:
           git --version
 
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
+
+          # 即使手动运行时选择了其他 ref，也始终更新默认分支。
           ref: ${{ github.event.repository.default_branch }}
 
-      - name: Verify checked-out repository
+      - name: Verify checkout
         run: |
           set -Eeuo pipefail
 
-          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+          readonly repo_dir="${GITHUB_WORKSPACE}"
 
-          git config \
-            --global \
-            --add safe.directory \
-            "${GITHUB_WORKSPACE}"
+          git config --global --add safe.directory "${repo_dir}"
 
-          if ! git -C "${GITHUB_WORKSPACE}" \
-            rev-parse --is-inside-work-tree \
-            >/dev/null 2>&1; then
-            echo "::error::Checkout did not create a usable Git working tree"
-            find "${GITHUB_WORKSPACE}" -maxdepth 2 -print || true
+          if [[ ! -d "${repo_dir}/.git" ]]; then
+            echo "::error::actions/checkout did not create .git metadata"
+            echo "Workspace contents:"
+            ls -la "${repo_dir}" || true
             exit 1
           fi
 
-          echo "Git repository root:"
-          git -C "${GITHUB_WORKSPACE}" rev-parse --show-toplevel
+          echo "Git version:"
+          git --version
+
+          echo "Repository root:"
+          git -C "${repo_dir}" rev-parse --show-toplevel
 
           echo "Checked-out commit:"
-          git -C "${GITHUB_WORKSPACE}" rev-parse HEAD
+          git -C "${repo_dir}" rev-parse HEAD
 
-          echo "Repository status:"
-          git -C "${GITHUB_WORKSPACE}" status --short
+          echo "Working-tree status:"
+          git -C "${repo_dir}" status --short
 
       - name: Check latest Arch kernel
         id: update
@@ -102,47 +95,11 @@ jobs:
           set -Eeuo pipefail
 
           cd "${GITHUB_WORKSPACE}"
-
           chmod +x scripts/update-arch-kernel.sh
-          ./scripts/update-arch-kernel.sh
-
-      - name: Plan workflow
-        id: plan
-        env:
-          KERNEL_CHANGED: ${{ steps.update.outputs.changed }}
-          EVENT_NAME: ${{ github.event_name }}
-          FORCE_BUILD: ${{ inputs.force_build }}
-          FORCE_PUBLISH: ${{ inputs.force_publish }}
-        run: |
-          set -Eeuo pipefail
-
-          build=false
-          publish=false
-
-          if [[ "${KERNEL_CHANGED}" == "true" ]]; then
-            build=true
-            publish=true
-          fi
-
-          if [[ "${EVENT_NAME}" == "workflow_dispatch" ]]; then
-            if [[ "${FORCE_BUILD:-false}" == "true" ]]; then
-              build=true
-            fi
-
-            if [[ "${FORCE_PUBLISH:-false}" == "true" ]]; then
-              publish=true
-            fi
-          fi
-
-          echo "build=${build}" >> "${GITHUB_OUTPUT}"
-          echo "publish=${publish}" >> "${GITHUB_OUTPUT}"
-
-          echo "Kernel changed: ${KERNEL_CHANGED}"
-          echo "Build package:  ${build}"
-          echo "Publish to AUR: ${publish}"
+          scripts/update-arch-kernel.sh
 
       - name: Install kernel build dependencies
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
@@ -154,11 +111,7 @@ jobs:
             namcap \
             patch
 
-          installed_kernel="$(
-            pacman -Q linux |
-              awk '{print $2}'
-          )"
-
+          installed_kernel="$(pacman -Q linux | awk '{print $2}')"
           expected_kernel="${{ steps.update.outputs.kernelpkgver }}"
 
           echo "Installed kernel package: ${installed_kernel}"
@@ -169,25 +122,8 @@ jobs:
             exit 1
           fi
 
-          build_directory="$(
-            find /usr/lib/modules \
-              -mindepth 2 \
-              -maxdepth 2 \
-              -type d \
-              -name build \
-              -print \
-              -quit
-          )"
-
-          if [[ -z "${build_directory}" ]]; then
-            echo "::error::linux-headers did not provide a kernel build directory"
-            exit 1
-          fi
-
-          echo "Kernel build directory: ${build_directory}"
-
       - name: Create unprivileged build user
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
@@ -198,145 +134,182 @@ jobs:
           chown -R builder:builder "${GITHUB_WORKSPACE}"
 
       - name: Update checksums
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
           runuser -u builder -- \
-            bash -lc "
+            env \
+              HOME=/home/builder \
+              GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            bash -c '
               set -Eeuo pipefail
-              cd '${GITHUB_WORKSPACE}'
+              cd "${GITHUB_WORKSPACE}"
               updpkgsums
-            "
+            '
+
+      - name: Regenerate .SRCINFO
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          runuser -u builder -- \
+            env \
+              HOME=/home/builder \
+              GITHUB_WORKSPACE="${GITHUB_WORKSPACE}" \
+            bash -c '
+              set -Eeuo pipefail
+              cd "${GITHUB_WORKSPACE}"
+              makepkg --printsrcinfo > .SRCINFO
+            '
+
+      - name: Prepare isolated package build directory
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -Eeuo pipefail
+
+          readonly repo_dir="${GITHUB_WORKSPACE}"
+          readonly build_dir="${PACKAGE_BUILD_DIR}"
+
+          rm -rf "${build_dir}"
+          install -d -m 755 -o builder -g builder "${build_dir}"
+
+          # makepkg 不在 GitHub 工作树中运行，避免 --clean/--cleanbuild
+          # 或其他构建清理操作影响仓库的 .git 元数据。
+          rsync \
+            --archive \
+            --delete \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='scripts/' \
+            --exclude='src/' \
+            --exclude='pkg/' \
+            --exclude='*.pkg.tar.*' \
+            "${repo_dir}/" \
+            "${build_dir}/"
+
+          chown -R builder:builder "${build_dir}"
+
+          echo "Repository directory: ${repo_dir}"
+          echo "Package build directory: ${build_dir}"
+
+          if ! git -C "${repo_dir}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            echo "::error::Git repository metadata disappeared before package build"
+            ls -la "${repo_dir}" || true
+            exit 1
+          fi
 
       - name: Build package
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
           runuser -u builder -- \
-            bash -lc "
+            env \
+              HOME=/home/builder \
+              PACKAGE_BUILD_DIR="${PACKAGE_BUILD_DIR}" \
+            bash -c '
               set -Eeuo pipefail
-              cd '${GITHUB_WORKSPACE}'
+              cd "${PACKAGE_BUILD_DIR}"
 
               makepkg \
                 --cleanbuild \
                 --clean \
                 --noconfirm
-            "
-
-      - name: Regenerate .SRCINFO
-        if: steps.plan.outputs.build == 'true'
-        run: |
-          set -Eeuo pipefail
-
-          runuser -u builder -- \
-            bash -lc "
-              set -Eeuo pipefail
-              cd '${GITHUB_WORKSPACE}'
-              makepkg --printsrcinfo > .SRCINFO
-            "
+            '
 
       - name: Run packaging checks
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
-          readonly repo="${GITHUB_WORKSPACE}"
+          readonly repo_dir="${GITHUB_WORKSPACE}"
+          readonly build_dir="${PACKAGE_BUILD_DIR}"
 
-          if [[ ! -d "${repo}/.git" ]]; then
-            echo "::error::Git repository is missing from ${repo}"
+          # 工作区已交给 builder，因此 root 使用 Git 时显式加入安全目录。
+          git config --global --add safe.directory "${repo_dir}"
+
+          if ! git -C "${repo_dir}" \
+            rev-parse --is-inside-work-tree \
+            >/dev/null 2>&1; then
+            echo "::error::Git repository not found at ${repo_dir}"
+            echo "Current directory: $(pwd)"
+            echo "Repository contents:"
+            ls -la "${repo_dir}" || true
             exit 1
           fi
 
-          cd "${repo}"
+          # 仅检查本次自动更新会提交的打包元数据。
+          git -C "${repo_dir}" diff --check -- PKGBUILD .SRCINFO
 
-          git config \
-            --global \
-            --add safe.directory \
-            "${repo}"
-
-          echo "Current directory:"
-          pwd
-
-          echo "Git repository root:"
-          git -C "${repo}" rev-parse --show-toplevel
-
-          echo "Repository status:"
-          git -C "${repo}" status --short
-
-          # 使用 -C 明确指定仓库，避免当前工作目录漂移。
-          git -C "${repo}" diff --check
-
-          # namcap 的部分外部内核模块警告仅作报告，不阻止发布。
-          namcap "${repo}/PKGBUILD" || true
+          # namcap 的部分警告不一定适用于外部内核模块，
+          # 因此暂时仅报告，不阻止发布。
+          namcap "${repo_dir}/PKGBUILD" || true
 
           package_file="$(
-            find "${repo}" \
+            find "${build_dir}" \
               -maxdepth 1 \
               -type f \
               -name '*.pkg.tar.*' \
+              ! -name '*.sig' \
               -print \
               -quit
           )"
 
           if [[ -z "${package_file}" ]]; then
             echo "::error::makepkg completed without producing a package"
+            echo "Build directory contents:"
+            ls -la "${build_dir}" || true
             exit 1
           fi
 
-          echo "Built package:"
-          echo "  ${package_file}"
-
+          echo "Built package: ${package_file}"
           namcap "${package_file}" || true
 
       - name: Commit and push GitHub update
-        if: steps.plan.outputs.build == 'true'
+        if: steps.update.outputs.changed == 'true'
         run: |
           set -Eeuo pipefail
 
-          readonly repo="${GITHUB_WORKSPACE}"
+          readonly repo_dir="${GITHUB_WORKSPACE}"
 
-          if [[ ! -d "${repo}/.git" ]]; then
-            echo "::error::Git repository is missing from ${repo}"
+          git config --global --add safe.directory "${repo_dir}"
+
+          if ! git -C "${repo_dir}" \
+            rev-parse --is-inside-work-tree \
+            >/dev/null 2>&1; then
+            echo "::error::Git repository not found before commit"
+            ls -la "${repo_dir}" || true
             exit 1
           fi
 
-          cd "${repo}"
+          git -C "${repo_dir}" config \
+            user.name "github-actions[bot]"
 
-          git config \
-            --global \
-            --add safe.directory \
-            "${repo}"
-
-          git -C "${repo}" config \
-            user.name \
-            "github-actions[bot]"
-
-          git -C "${repo}" config \
+          git -C "${repo_dir}" config \
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git -C "${repo}" add \
-            PKGBUILD \
-            .SRCINFO
+          git -C "${repo_dir}" add PKGBUILD .SRCINFO
 
-          if git -C "${repo}" diff --cached --quiet; then
-            echo "No GitHub package metadata changes to commit."
+          if git -C "${repo_dir}" diff --cached --quiet; then
+            echo "No GitHub changes to commit."
           else
             echo "Changes to commit:"
-            git -C "${repo}" diff --cached --stat
+            git -C "${repo_dir}" diff --cached --stat
 
-            git -C "${repo}" commit \
+            git -C "${repo_dir}" commit \
               -m "Update to linux ${{ steps.update.outputs.kernelpkgver }}"
 
-            git -C "${repo}" push \
+            git -C "${repo_dir}" push \
               origin \
               "HEAD:${GITHUB_DEFAULT_BRANCH}"
           fi
 
+      # 这两个 AUR 步骤故意不加 changed 条件：
+      # 如果上一次运行已经推送 GitHub、但同步 AUR 时临时失败，
+      # 下一次定时运行仍会自动重新同步并恢复一致性。
       - name: Configure AUR SSH authentication
-        if: steps.plan.outputs.publish == 'true'
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
@@ -353,13 +326,14 @@ jobs:
           rm -rf "${ssh_dir}"
           install -d -m 700 "${ssh_dir}"
 
-          # 删除从 Windows 环境复制私钥时可能混入的 CR 字符。
+          # 删除复制私钥时可能混入的 Windows CR 字符。
           printf '%s\n' "${AUR_SSH_PRIVATE_KEY}" \
             | tr -d '\r' \
             > "${ssh_dir}/id_ed25519"
 
           chmod 600 "${ssh_dir}/id_ed25519"
 
+          # 验证私钥本身能够被 OpenSSH 读取。
           if ! ssh-keygen \
             -y \
             -f "${ssh_dir}/id_ed25519" \
@@ -368,6 +342,7 @@ jobs:
             exit 1
           fi
 
+          # 获取 AUR 当前的 Ed25519 主机密钥。
           ssh-keyscan \
             -T 20 \
             -t ed25519 \
@@ -385,14 +360,13 @@ jobs:
           actual_fingerprints="$(
             ssh-keygen \
               -lf "${ssh_dir}/known_hosts" \
-              -E sha256 |
-              awk '{print $2}'
+              -E sha256 \
+              | awk '{print $2}'
           )"
 
           echo "Expected AUR fingerprint:"
           echo "  ${expected_fingerprint}"
-
-          echo "Received AUR fingerprints:"
+          echo "Received SSH fingerprints:"
           while IFS= read -r fingerprint; do
             echo "  ${fingerprint}"
           done <<< "${actual_fingerprints}"
@@ -410,7 +384,6 @@ jobs:
               HostName aur.archlinux.org
               User aur
               IdentityFile ${ssh_dir}/id_ed25519
-              IdentityAgent none
               IdentitiesOnly yes
               UserKnownHostsFile ${ssh_dir}/known_hosts
               StrictHostKeyChecking yes
@@ -420,18 +393,17 @@ jobs:
 
           chmod 600 "${ssh_dir}/config"
 
-          echo "AUR_SSH_DIR=${ssh_dir}" \
-            >> "${GITHUB_ENV}"
+          # 供下一个步骤使用；不在环境变量中写入私钥本身。
+          echo "AUR_SSH_DIR=${ssh_dir}" >> "${GITHUB_ENV}"
 
-          # 在真正 clone 之前检查主机密钥和账户授权。
+          # 在 clone 之前验证主机密钥和 AUR 账户授权。
           ssh \
             -T \
             -F "${ssh_dir}/config" \
             aur.archlinux.org \
             help
 
-      - name: Synchronize AUR repository
-        if: steps.plan.outputs.publish == 'true'
+      - name: Synchronize and verify AUR repository
         run: |
           set -Eeuo pipefail
 
@@ -442,51 +414,74 @@ jobs:
 
           export GIT_SSH_COMMAND="ssh -F ${AUR_SSH_DIR}/config"
 
-          readonly repo="${GITHUB_WORKSPACE}"
           readonly aur_dir="/tmp/aur-package"
           readonly staging_dir="/tmp/aur-package-staging"
+          readonly aur_rpc_url="https://aur.archlinux.org/rpc/v5/info"
 
-          if [[ ! -f "${repo}/PKGBUILD" ]]; then
-            echo "::error::PKGBUILD is missing from ${repo}"
-            exit 1
-          fi
+          aur_rpc_version() {
+            local response
 
-          if [[ ! -f "${repo}/.SRCINFO" ]]; then
-            echo "::error::.SRCINFO is missing from ${repo}"
-            exit 1
-          fi
+            if ! response="$(
+              curl \
+                --fail \
+                --silent \
+                --show-error \
+                --location \
+                --retry 5 \
+                --retry-delay 3 \
+                --retry-all-errors \
+                --header 'Cache-Control: no-cache' \
+                --header 'Pragma: no-cache' \
+                --get \
+                --data-urlencode "arg[]=${AUR_PACKAGE_NAME}" \
+                "${aur_rpc_url}"
+            )"; then
+              echo "::warning::Could not query AUR RPC" >&2
+              printf '%s\n' "<unavailable>"
+              return 0
+            fi
 
-          rm -rf \
-            "${aur_dir}" \
-            "${staging_dir}"
+            jq -r \
+              'if (.resultcount // 0) > 0
+               then .results[0].Version
+               else "<missing>"
+               end' \
+              <<< "${response}"
+          }
 
-          # 对尚未创建的 pkgbase，AUR 会返回一个空 Git 仓库。
-          git \
-            -c init.defaultBranch=master \
-            clone \
+          srcinfo_value() {
+            local key="$1"
+
+            sed -nE \
+              "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*(.+)$/\1/p" \
+              .SRCINFO \
+              | head -n 1
+          }
+
+          rm -rf "${aur_dir}" "${staging_dir}"
+
+          # AUR 与 GitHub 必须保持各自独立的 Git 历史。
+          # 始终先 clone AUR 当前 master，再在它上面创建 fast-forward commit。
+          git clone \
             "ssh://aur@aur.archlinux.org/${AUR_PACKAGE_NAME}.git" \
             "${aur_dir}"
 
-          install \
-            -d \
-            -m 755 \
-            "${staging_dir}"
+          install -d -m 755 "${staging_dir}"
 
-          # AUR 仓库禁止子目录，因此只同步以下顶层文件。
+          # AUR 仓库禁止包含子目录，因此只同步这些顶层打包文件。
           package_files=(
             PKGBUILD
             .SRCINFO
-            LICENSE
-            linux-wireless-reg-unlocked.install
             0001-iwlwifi-add-lar_disable.patch
             0002-iwlwifi-nvm-unlock-6ghz-and-relax-channel-flags.patch
             0003-cfg80211-allow-unsigned-regdb-and-reject-driver-country-ie-regdom-hints.patch
             iwlwifi-lar.conf
             dracut-wireless-reg-unlocked.conf
+            linux-wireless-reg-unlocked.install
           )
 
           for file in "${package_files[@]}"; do
-            source_path="${repo}/${file}"
+            source_path="${GITHUB_WORKSPACE}/${file}"
 
             if [[ ! -f "${source_path}" ]]; then
               echo "::error::Required AUR package file is missing: ${file}"
@@ -499,55 +494,125 @@ jobs:
               "${staging_dir}/${file}"
           done
 
-          # 精确同步白名单，同时保留 AUR 仓库自身的 .git。
+          if [[ -f "${GITHUB_WORKSPACE}/LICENSE" ]]; then
+            install \
+              -m 644 \
+              "${GITHUB_WORKSPACE}/LICENSE" \
+              "${staging_dir}/LICENSE"
+          fi
+
+          # 正常同步时保持 GitHub 生成的 .SRCINFO 原样。
+          # 只有在 AUR Git 已一致、但 aurweb 元数据仍过期时，
+          # 才在后面的恢复分支制造一次无语义的 blob 变化。
+
+          # 让 AUR 工作树精确匹配上面的顶层文件，同时保留 .git。
           rsync \
             --archive \
+            --checksum \
             --delete \
+            --itemize-changes \
             --exclude='.git/' \
             "${staging_dir}/" \
             "${aur_dir}/"
 
           cd "${aur_dir}"
 
-          git config \
-            user.name \
-            "${AUR_GIT_NAME}"
+          git config user.name "${AUR_GIT_NAME}"
+          git config user.email "${AUR_GIT_EMAIL}"
 
-          git config \
-            user.email \
-            "${AUR_GIT_EMAIL}"
+          pkgver="$(srcinfo_value pkgver)"
+          pkgrel="$(srcinfo_value pkgrel)"
+          epoch="$(srcinfo_value epoch || true)"
+
+          if [[ -z "${pkgver}" || -z "${pkgrel}" ]]; then
+            echo "::error::Could not read pkgver/pkgrel from .SRCINFO"
+            exit 1
+          fi
+
+          expected_aur_version="${pkgver}-${pkgrel}"
+
+          if [[ -n "${epoch}" ]]; then
+            expected_aur_version="${epoch}:${expected_aur_version}"
+          fi
+
+          current_aur_version="$(aur_rpc_version)"
+
+          echo "Expected AUR version: ${expected_aur_version}"
+          echo "Current AUR RPC version: ${current_aur_version}"
 
           git add --all
 
           if git diff --cached --quiet; then
-            echo "AUR repository is already synchronized."
-            exit 0
-          fi
+            if [[ "${current_aur_version}" == "${expected_aur_version}" ]]; then
+              echo "AUR Git repository and aurweb metadata are already synchronized."
+              exit 0
+            fi
 
-          kernel_version="$(
-            sed -nE \
-              's/^_kernelpkgver="?([^"]+)"?$/\1/p' \
-              PKGBUILD |
-              head -n 1
-          )"
-
-          if [[ -z "${kernel_version}" ]]; then
-            echo "::error::Could not read _kernelpkgver from PKGBUILD"
-            exit 1
+            # 极端恢复路径：文件已经一致，但 aurweb 仍停留在旧版本。
+            # 再增加一个空行，确保本次 push 的 .SRCINFO blob 必然变化。
+            echo "::warning::AUR Git is synchronized, but aurweb metadata is stale"
+            printf '\n' >> .SRCINFO
+            git add .SRCINFO
+            commit_message="Refresh metadata for ${expected_aur_version}"
+          else
+            commit_message="Update to ${expected_aur_version}"
           fi
 
           echo "Files to publish to AUR:"
           git status --short
 
-          if git rev-parse --verify HEAD >/dev/null 2>&1; then
-            commit_message="Update to linux ${kernel_version}"
-          else
-            commit_message="Initial release for linux ${kernel_version}"
+          git commit -m "${commit_message}"
+          git push origin master
+
+          # 以 AUR Git 远端 HEAD 为发布成功的权威判断。
+          # aurweb/RPC 元数据可能在 Git push 后延迟更新，因此不能用短暂的
+          # RPC 旧值反向否定已经成功的 Git 发布。
+          local_head="$(git rev-parse HEAD)"
+          remote_head="$(
+            git ls-remote origin refs/heads/master \
+              | awk 'NR == 1 { print $1 }'
+          )"
+
+          if [[ -z "${remote_head}" ]]; then
+            echo "::error::Could not read AUR Git remote HEAD"
+            exit 1
           fi
 
-          git commit \
-            -m "${commit_message}"
+          echo "Local AUR commit:  ${local_head}"
+          echo "Remote AUR commit: ${remote_head}"
 
-          git push \
-            origin \
-            HEAD:master
+          if [[ "${local_head}" != "${remote_head}" ]]; then
+            echo "::error::AUR Git remote HEAD does not match the pushed commit"
+            exit 1
+          fi
+
+          echo "AUR Git repository successfully updated."
+
+          # 尽量等待 aurweb/RPC 同步，并要求中间缓存重新验证响应。
+          # 即使最终仍未刷新，也只给出 warning；下一次定时运行
+          # 会再次检查并在确有必要时触发元数据恢复。
+          for attempt in $(seq 1 60); do
+            published_aur_version="$(aur_rpc_version)"
+
+            printf \
+              'AUR metadata verification %d/60: %s\n' \
+              "${attempt}" \
+              "${published_aur_version}"
+
+            if [[ "${published_aur_version}" == "${expected_aur_version}" ]]; then
+              echo "AUR Git and aurweb metadata successfully updated."
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo \
+            "::warning::AUR Git was updated successfully, but aurweb RPC still reports " \
+            "${published_aur_version}; expected ${expected_aur_version}"
+
+          echo \
+            "::warning::This is likely delayed aurweb metadata propagation. " \
+            "Published AUR commit: ${remote_head}"
+
+          exit 0
