@@ -310,6 +310,7 @@ jobs:
       # 如果上一次运行已经推送 GitHub、但同步 AUR 时临时失败，
       # 下一次定时运行仍会自动重新同步并恢复一致性。
       - name: Configure AUR SSH authentication
+        id: aur_ssh
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
         run: |
@@ -397,13 +398,40 @@ jobs:
           echo "AUR_SSH_DIR=${ssh_dir}" >> "${GITHUB_ENV}"
 
           # 在 clone 之前验证主机密钥和 AUR 账户授权。
-          ssh \
-            -T \
-            -F "${ssh_dir}/config" \
-            aur.archlinux.org \
-            help
+          # AUR 维护时 SSH 会返回非零状态，因此必须先捕获输出，
+          # 只把明确的维护提示视为本次运行可安全跳过。
+          set +e
+          ssh_output="$(
+            ssh \
+              -T \
+              -F "${ssh_dir}/config" \
+              aur.archlinux.org \
+              help \
+              2>&1
+          )"
+          ssh_status=$?
+          set -e
+
+          printf '%s\n' "${ssh_output}"
+
+          if grep \
+            -Fq \
+            "The AUR is down due to maintenance. We will be back soon." \
+            <<< "${ssh_output}"; then
+            echo "::warning::AUR is under maintenance; skipping AUR synchronization for this run"
+            echo "available=false" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+
+          if (( ssh_status != 0 )); then
+            echo "::error::AUR SSH authentication check failed with exit code ${ssh_status}"
+            exit "${ssh_status}"
+          fi
+
+          echo "available=true" >> "${GITHUB_OUTPUT}"
 
       - name: Synchronize and verify AUR repository
+        if: steps.aur_ssh.outputs.available == 'true'
         run: |
           set -Eeuo pipefail
 
